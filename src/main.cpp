@@ -37,7 +37,7 @@ namespace bridge {
                 s_jobs.push_back({req, result});
             }
             if (future.wait_for(std::chrono::seconds(20)) != std::future_status::ready) {
-                return {504, "application/json", R"({"ok":false,"error":"game did not answer (paused or loading?)"})"};
+                return {504, "application/json", R"({"ok":false,"error":"game did not answer, it may be loading"})"};
             }
             return future.get();
         }
