@@ -1,0 +1,29 @@
+{
+  "geode": "5.8.2",
+  "gd": {
+    "win": "2.2081"
+  },
+  "id": "halil.decor-bridge",
+  "name": "Decor Bridge",
+  "version": "v0.1.0",
+  "developer": "halil",
+  "description": "Local bridge that lets an AI assistant read and decorate the level open in the editor, live.",
+  "tags": ["editor", "utility"],
+  "settings": {
+    "enabled": {
+      "type": "bool",
+      "name": "Enable bridge",
+      "description": "Runs a small HTTP server on 127.0.0.1 only. Restart the game after changing this.",
+      "default": true
+    },
+    "port": {
+      "type": "int",
+      "name": "Port",
+      "description": "Restart the game after changing this.",
+      "default": 7341,
+      "min": 1024,
+      "max": 65535,
+      "enable-if": "enabled"
+    }
+  }
+}
