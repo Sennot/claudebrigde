@@ -5,7 +5,7 @@
   },
   "id": "halil.decor-bridge",
   "name": "Decor Bridge",
-  "version": "v0.2.0",
+  "version": "v0.3.0",
   "developer": "halil",
   "description": "Local bridge that lets an AI assistant read and decorate the level open in the editor, live.",
   "tags": ["editor", "utility"],

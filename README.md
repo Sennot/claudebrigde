@@ -14,7 +14,7 @@ curl -s -H "X-GD-Bridge: 1" http://127.0.0.1:7341/state
 | Method | Path | Description |
 |---|---|---|
 | GET | `/state` | Editor open, playtesting, level name, song, object counts, zoom, visible rect |
-| GET | `/objects?x0=&y0=&x1=&y1=` | Objects in a level-space rect (all if omitted), `&limit=N` |
+| GET | `/objects?x0=&y0=&x1=&y1=` | `uid id x y` lines in a rect (all if omitted), `&full=1` for JSON with save strings, `&limit=N` |
 | GET | `/objects?selected=1` | Selected objects |
 | GET | `/level` | Full level string (plain text) |
 | GET | `/catalog?q=star,glow` | `id frame` lines whose sprite name matches any term |
@@ -23,7 +23,7 @@ curl -s -H "X-GD-Bridge: 1" http://127.0.0.1:7341/state
 | POST | `/select` | Body: uids; empty body deselects |
 | POST | `/undo` | Editor undo |
 | POST | `/view?x=&y=&zoom=` | Centers the camera on a level point |
-| GET | `/screenshot?x0=&y0=&x1=&y1=&maxsize=768` | PNG of the screen, optionally cropped to an on-screen rect and downscaled; returns its path |
+| GET | `/screenshot?x0=&y0=&x1=&y1=&maxsize=400` | PNG of the screen, optionally cropped to an on-screen rect and downscaled; returns its path |
 
 All coordinates are level coordinates, as saved in object keys 2/3.
 `tools/gd.sh` wraps these calls; `docs/object-ids.md` lists verified object IDs.

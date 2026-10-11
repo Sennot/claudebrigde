@@ -210,7 +210,8 @@ namespace bridge {
                 "Decor Bridge. Every request needs the header 'X-GD-Bridge: 1'.\n"
                 "All coordinates are level coordinates, as saved in object keys 2/3.\n"
                 "GET  /state                       editor, level, song, view rect, counts\n"
-                "GET  /objects?x0=&y0=&x1=&y1=     objects in a rect (all if omitted)\n"
+                "GET  /objects?x0=&y0=&x1=&y1=     'uid id x y' lines in a rect (all if omitted)\n"
+                "     &full=1                      JSON with full save strings\n"
                 "GET  /objects?selected=1          selected objects\n"
                 "     &limit=N                     default 20000\n"
                 "GET  /level                       full level string (text/plain)\n"
@@ -223,7 +224,7 @@ namespace bridge {
                 "POST /view?x=&y=&zoom=            center the editor camera on a level point\n"
                 "GET  /screenshot                  PNG of the screen, returns its path\n"
                 "     ?x0=&y0=&x1=&y1=             crop to an on-screen rect\n"
-                "     &maxsize=768&hideui=1        longest side in pixels, hide editor UI\n"};
+                "     &maxsize=400&hideui=1        longest side in pixels, hide editor UI\n"};
         }
 
         Response state() {
@@ -271,6 +272,15 @@ namespace bridge {
                 });
             }
 
+            // Compact by default: full save strings get huge on real levels.
+            if (!flag(req, "full", false)) {
+                std::string out = fmt::format("# count {} truncated {}\n# uid id x y\n", result.size(), truncated);
+                for (auto obj : result) {
+                    auto pos = levelPos(obj);
+                    out += fmt::format("{} {} {} {}\n", obj->m_uniqueID, obj->m_objectID, pos.x, pos.y);
+                }
+                return {200, "text/plain", out};
+            }
             return ok(fmt::format(
                 R"("count":{},"truncated":{},"objects":{})", result.size(), truncated, objectsJson(*ed, result)
             ));
@@ -463,7 +473,7 @@ namespace bridge {
 
             // Area-average downscale so the longest side is at most maxsize.
             int cropW = cx1 - cx0, cropH = cy1 - cy0;
-            int maxSize = static_cast<int>(number(req, "maxsize").value_or(768));
+            int maxSize = static_cast<int>(number(req, "maxsize").value_or(400));
             double scale = std::min(1.0, static_cast<double>(std::max(maxSize, 16)) / std::max(cropW, cropH));
             int outW = std::max(1, static_cast<int>(cropW * scale)), outH = std::max(1, static_cast<int>(cropH * scale));
 
