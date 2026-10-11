@@ -17,12 +17,16 @@ curl -s -H "X-GD-Bridge: 1" http://127.0.0.1:7341/state
 | GET | `/objects?x0=&y0=&x1=&y1=` | Objects in a level-space rect (all if omitted), `&limit=N` |
 | GET | `/objects?selected=1` | Selected objects |
 | GET | `/level` | Full level string (plain text) |
-| POST | `/add` | Body: GD object string (`1,1,2,15,3,15;...`, `;` or newline separated). Pasted in place as one undo step, returns new uids |
+| GET | `/catalog?q=star,glow` | `id frame` lines whose sprite name matches any term |
+| POST | `/add` | Body: GD object string (`1,1,2,15,3,15;...`, `;` or newline separated). Pasted in place as one undo step and deselected (`?deselect=0` keeps them selected), returns new uids |
 | POST | `/delete` | Body: uids. Deleted as one undo step |
 | POST | `/select` | Body: uids; empty body deselects |
 | POST | `/undo` | Editor undo |
 | POST | `/view?x=&y=&zoom=` | Centers the camera on a level point |
-| GET | `/screenshot?hideui=1` | Renders the screen to a PNG in the mod save dir and returns its path |
+| GET | `/screenshot?x0=&y0=&x1=&y1=&maxsize=768` | PNG of the screen, optionally cropped to an on-screen rect and downscaled; returns its path |
+
+All coordinates are level coordinates, as saved in object keys 2/3.
+`tools/gd.sh` wraps these calls; `docs/object-ids.md` lists verified object IDs.
 
 Objects are returned as `{"uid","id","x","y","str"}` where `str` is the
 object's full save string (groups, colors, trigger settings, ...).

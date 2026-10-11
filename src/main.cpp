@@ -2,7 +2,9 @@
 #include <Geode/modify/CCScheduler.hpp>
 
 #include "http_server.hpp"
+#include "png_writer.hpp"
 
+#include <algorithm>
 #include <deque>
 #include <filesystem>
 #include <future>
@@ -144,8 +146,17 @@ namespace bridge {
             return ed.layer->m_playbackMode != PlaybackMode::Not;
         }
 
+        // Object nodes sit this far above the coordinates GD saves (keys 2/3).
+        // Everything the bridge exposes uses the saved, "level" coordinates.
+        constexpr float kGroundY = 90.f;
+
+        CCPoint levelPos(GameObject* obj) {
+            auto p = obj->getPosition();
+            return {p.x, p.y - kGroundY};
+        }
+
         std::string objectJson(Editor const& ed, GameObject* obj) {
-            auto pos = obj->getPosition();
+            auto pos = levelPos(obj);
             return fmt::format(
                 R"({{"uid":{},"id":{},"x":{},"y":{},"str":{}}})",
                 obj->m_uniqueID, obj->m_objectID, pos.x, pos.y,
@@ -177,7 +188,12 @@ namespace bridge {
             auto layer = ed.layer->m_objectLayer;
             auto a = layer->convertToNodeSpace({0.f, 0.f});
             auto b = layer->convertToNodeSpace({win.width, win.height});
-            return {a.x, a.y, b.x - a.x, b.y - a.y};
+            return {a.x, a.y - kGroundY, b.x - a.x, b.y - a.y};
+        }
+
+        // Screen position (points) of a level-space point.
+        CCPoint levelToScreen(Editor const& ed, CCPoint level) {
+            return ed.layer->m_objectLayer->convertToWorldSpace({level.x, level.y + kGroundY});
         }
 
         std::string songPath(GJGameLevel* level) {
@@ -192,17 +208,22 @@ namespace bridge {
         Response help() {
             return {200, "text/plain",
                 "Decor Bridge. Every request needs the header 'X-GD-Bridge: 1'.\n"
+                "All coordinates are level coordinates, as saved in object keys 2/3.\n"
                 "GET  /state                       editor, level, song, view rect, counts\n"
-                "GET  /objects?x0=&y0=&x1=&y1=     objects in a level-space rect (all if omitted)\n"
+                "GET  /objects?x0=&y0=&x1=&y1=     objects in a rect (all if omitted)\n"
                 "GET  /objects?selected=1          selected objects\n"
                 "     &limit=N                     default 20000\n"
                 "GET  /level                       full level string (text/plain)\n"
+                "GET  /catalog?q=star,glow         'id frame' lines matching any term, &limit=300\n"
                 "POST /add        body: object string 'k,v,k,v;k,v,...;'  pasted in place, one undo step\n"
+                "     ?deselect=0                  keep the pasted objects selected\n"
                 "POST /delete     body: uids       deleted as one undo step\n"
                 "POST /select     body: uids       empty body deselects\n"
                 "POST /undo                        editor undo\n"
                 "POST /view?x=&y=&zoom=            center the editor camera on a level point\n"
-                "GET  /screenshot?hideui=1         renders the screen to PNG, returns its path\n"};
+                "GET  /screenshot                  PNG of the screen, returns its path\n"
+                "     ?x0=&y0=&x1=&y1=             crop to an on-screen rect\n"
+                "     &maxsize=768&hideui=1        longest side in pixels, hide editor UI\n"};
         }
 
         Response state() {
@@ -245,7 +266,7 @@ namespace bridge {
                 double x0 = number(req, "x0").value_or(-1e9), y0 = number(req, "y0").value_or(-1e9);
                 double x1 = number(req, "x1").value_or(1e9), y1 = number(req, "y1").value_or(1e9);
                 collect(ed->layer->m_objects, [&](GameObject* obj) {
-                    auto p = obj->getPosition();
+                    auto p = levelPos(obj);
                     return p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
                 });
             }
@@ -253,6 +274,39 @@ namespace bridge {
             return ok(fmt::format(
                 R"("count":{},"truncated":{},"objects":{})", result.size(), truncated, objectsJson(*ed, result)
             ));
+        }
+
+        std::string lowercase(std::string s) {
+            std::ranges::transform(s, s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return s;
+        }
+
+        // Object ID -> sprite frame name, filtered by comma-separated substrings.
+        Response catalog(Request const& req) {
+            std::vector<std::string> terms;
+            if (auto it = req.query.find("q"); it != req.query.end()) {
+                std::string_view rest = it->second;
+                while (!rest.empty()) {
+                    auto comma = rest.find(',');
+                    if (auto term = lowercase(std::string(rest.substr(0, comma))); !term.empty()) terms.push_back(term);
+                    if (comma == std::string_view::npos) break;
+                    rest.remove_prefix(comma + 1);
+                }
+            }
+            size_t limit = static_cast<size_t>(number(req, "limit").value_or(300));
+
+            std::string out;
+            size_t count = 0;
+            for (auto const& [id, frame] : ObjectToolbox::sharedState()->m_allKeys) {
+                std::string name(frame);
+                if (!terms.empty()) {
+                    auto lower = lowercase(name);
+                    if (std::ranges::none_of(terms, [&](auto const& t) { return lower.find(t) != std::string::npos; })) continue;
+                }
+                if (count++ >= limit) break;
+                out += std::to_string(id) + " " + name + "\n";
+            }
+            return {200, "text/plain", out};
         }
 
         Response levelString() {
@@ -275,6 +329,8 @@ namespace bridge {
             if (str.find_first_not_of("; \t") == std::string::npos) return fail(400, "empty object string");
 
             auto pasted = ed->ui->pasteObjects(gd::string(str), true, false);
+            // Pasted objects come in selected; the highlight hides their colors.
+            if (flag(req, "deselect", true)) ed->ui->deselectAll();
             ed->ui->updateButtons();
             ed->ui->updateObjectInfoLabel();
 
@@ -341,7 +397,7 @@ namespace bridge {
                     static_cast<float>(y.value_or(current.getMidY()))
                 };
                 auto win = CCDirector::sharedDirector()->getWinSize();
-                auto onScreen = layer->convertToWorldSpace(target);
+                auto onScreen = levelToScreen(*ed, target);
                 layer->setPosition(layer->getPosition() + (ccp(win.width / 2, win.height / 2) - onScreen));
             }
 
@@ -380,11 +436,62 @@ namespace bridge {
 
             auto image = texture->newCCImage(true);
             if (!image) return fail(500, "could not read render texture");
-            bool saved = image->saveToFile(path.string().c_str(), true);
-            image->release();
-            if (!saved) return fail(500, "could not save png");
+            int imgW = image->getWidth(), imgH = image->getHeight();
+            int bpp = image->hasAlpha() ? 4 : 3;
+            auto data = image->getData();
 
-            std::string fields = fmt::format(R"("path":{})", quote(path.string()));
+            // Crop to a level-space rect if one is given (it must be on screen).
+            int cx0 = 0, cy0 = 0, cx1 = imgW, cy1 = imgH;
+            bool clipped = false;
+            auto x0 = number(req, "x0"), y0 = number(req, "y0"), x1 = number(req, "x1"), y1 = number(req, "y1");
+            if (ed && x0 && y0 && x1 && y1) {
+                auto a = levelToScreen(*ed, {static_cast<float>(std::min(*x0, *x1)), static_cast<float>(std::min(*y0, *y1))});
+                auto b = levelToScreen(*ed, {static_cast<float>(std::max(*x0, *x1)), static_cast<float>(std::max(*y0, *y1))});
+                float sx = imgW / win.width, sy = imgH / win.height;
+                int rx0 = static_cast<int>(a.x * sx), rx1 = static_cast<int>(b.x * sx);
+                int ry0 = imgH - static_cast<int>(b.y * sy), ry1 = imgH - static_cast<int>(a.y * sy);
+                cx0 = std::clamp(rx0, 0, imgW);
+                cx1 = std::clamp(rx1, 0, imgW);
+                cy0 = std::clamp(ry0, 0, imgH);
+                cy1 = std::clamp(ry1, 0, imgH);
+                clipped = cx0 != rx0 || cx1 != rx1 || cy0 != ry0 || cy1 != ry1;
+                if (cx1 - cx0 < 2 || cy1 - cy0 < 2) {
+                    image->release();
+                    return fail(400, "region is not on screen, POST /view first");
+                }
+            }
+
+            // Area-average downscale so the longest side is at most maxsize.
+            int cropW = cx1 - cx0, cropH = cy1 - cy0;
+            int maxSize = static_cast<int>(number(req, "maxsize").value_or(768));
+            double scale = std::min(1.0, static_cast<double>(std::max(maxSize, 16)) / std::max(cropW, cropH));
+            int outW = std::max(1, static_cast<int>(cropW * scale)), outH = std::max(1, static_cast<int>(cropH * scale));
+
+            std::vector<uint8_t> rgb(static_cast<size_t>(outW) * outH * 3);
+            for (int oy = 0; oy < outH; oy++) {
+                int sy0 = cy0 + oy * cropH / outH, sy1 = std::max(sy0 + 1, cy0 + (oy + 1) * cropH / outH);
+                for (int ox = 0; ox < outW; ox++) {
+                    int sx0 = cx0 + ox * cropW / outW, sx1 = std::max(sx0 + 1, cx0 + (ox + 1) * cropW / outW);
+                    uint32_t sum[3] = {0, 0, 0}, n = 0;
+                    for (int y = sy0; y < sy1; y++) {
+                        auto row = data + (static_cast<size_t>(y) * imgW + sx0) * bpp;
+                        for (int x = sx0; x < sx1; x++, row += bpp, n++) {
+                            sum[0] += row[0];
+                            sum[1] += row[1];
+                            sum[2] += row[2];
+                        }
+                    }
+                    auto out = &rgb[(static_cast<size_t>(oy) * outW + ox) * 3];
+                    for (int c = 0; c < 3; c++) out[c] = static_cast<uint8_t>(sum[c] / n);
+                }
+            }
+            image->release();
+
+            if (!png::writeRGB(path.string(), rgb, outW, outH)) return fail(500, "could not save png");
+
+            std::string fields = fmt::format(
+                R"("path":{},"width":{},"height":{},"clipped":{})", quote(path.string()), outW, outH, clipped
+            );
             if (ed) {
                 auto rect = visibleRect(*ed);
                 fields += fmt::format(
@@ -403,6 +510,7 @@ namespace bridge {
             if (get && p == "/state") return state();
             if (get && p == "/objects") return objects(req);
             if (get && p == "/level") return levelString();
+            if (get && p == "/catalog") return catalog(req);
             if (get && p == "/screenshot") return screenshot(req);
             if (post && p == "/add") return add(req);
             if (post && p == "/delete") return deleteObjects(req);
