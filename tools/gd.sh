@@ -8,7 +8,10 @@
 #   gd.sh add 'objstr' | gd.sh add < file     one object per line or ';'
 #   gd.sh del uid,uid,...
 #   gd.sh view x y [zoom]
+#   gd.sh area                                rect the user marked (hold Tab + drag in the editor)
+#   gd.sh area x0 y0 x1 y1 | gd.sh area clear
 #   gd.sh shot [x0 y0 x1 y1] [maxsize]        prints the PNG path (default 400px)
+#   gd.sh shot area [maxsize]                 screenshot of the marked area
 #   gd.sh fill x0 y0 x1 y1 [channel]          fill block cells with plain squares (1010 black)
 #   gd.sh scatter theme x0 y0 x1 y1 [n] [margin]   random white deco (themes: spooky, space)
 #   gd.sh undo | level | help
@@ -57,7 +60,15 @@ case "$cmd" in
   add)   if [ $# -ge 1 ]; then c --data-binary "$1" "$B/add"; else c --data-binary @- "$B/add"; fi ;;
   del)   c --data-binary "$1" "$B/delete" ;;
   view)  c -X POST "$B/view?x=$1&y=$2${3:+&zoom=$3}" ;;
-  shot)  if [ $# -ge 4 ]; then q="x0=$1&y0=$2&x1=$3&y1=$4&maxsize=${5:-400}"; else q="maxsize=${1:-400}"; fi
+  area)  if [ "${1:-}" = clear ]; then c -X POST "$B/area?clear=1"
+         elif [ $# -ge 4 ]; then c -X POST "$B/area?x0=$1&y0=$2&x1=$3&y1=$4"
+         else c "$B/area"; fi ;;
+  shot)  if [ "${1:-}" = area ]; then
+           r=$(c "$B/area" | sed -n 's/.*"x0":\([-0-9.e]*\),"y0":\([-0-9.e]*\),"x1":\([-0-9.e]*\),"y1":\([-0-9.e]*\).*/\1 \2 \3 \4/p')
+           [ -n "$r" ] || { echo "no area marked" >&2; exit 1; }
+           set -- $r "${2:-400}"
+         fi
+         if [ $# -ge 4 ]; then q="x0=$1&y0=$2&x1=$3&y1=$4&maxsize=${5:-400}"; else q="maxsize=${1:-400}"; fi
          c "$B/screenshot?$q" | sed -n 's/.*"path":"\([^"]*\)".*/\1/p' | sed 's/\\\\/\\/g' ;;
   fill)  S=""; ch=${5:-1010}
          for ((x = ${1%.*} + 15; x < ${3%.*}; x += 30)); do

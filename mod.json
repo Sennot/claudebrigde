@@ -5,7 +5,7 @@
   },
   "id": "halil.decor-bridge",
   "name": "Decor Bridge",
-  "version": "v0.3.0",
+  "version": "v0.4.0",
   "developer": "halil",
   "description": "Local bridge that lets an AI assistant read and decorate the level open in the editor, live.",
   "tags": ["editor", "utility"],
@@ -24,6 +24,13 @@
       "min": 1024,
       "max": 65535,
       "enable-if": "enabled"
+    },
+    "area-key": {
+      "type": "keybind",
+      "name": "Area key",
+      "description": "Hold in the editor and drag with the mouse to mark an area for the assistant (GET /area). A click without dragging clears it.",
+      "default": "Tab",
+      "category": "editor"
     }
   }
 }

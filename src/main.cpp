@@ -1,5 +1,6 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/CCScheduler.hpp>
+#include <Geode/modify/EditorUI.hpp>
 
 #include "http_server.hpp"
 #include "png_writer.hpp"
@@ -196,6 +197,126 @@ namespace bridge {
             return ed.layer->m_objectLayer->convertToWorldSpace({level.x, level.y + kGroundY});
         }
 
+        // ---- area picker ------------------------------------------------------
+        // Hold the "area-key" keybind in the editor and drag with the mouse to
+        // mark a level rect. The assistant reads it with GET /area, so the user
+        // can just say "decorate the area".
+
+        bool s_areaKeyHeld = false;
+        bool s_areaDragging = false;
+        CCPoint s_dragStart;
+        std::optional<CCRect> s_area;
+        int s_areaSeq = 0;
+        LevelEditorLayer* s_areaLayer = nullptr; // editor the area belongs to
+        float s_areaDrawnScale = 0.f;
+
+        CCPoint touchToLevel(Editor const& ed, CCTouch* touch) {
+            auto p = ed.layer->m_objectLayer->convertToNodeSpace(touch->getLocation());
+            return {p.x, p.y - kGroundY};
+        }
+
+        CCRect rectBetween(CCPoint a, CCPoint b) {
+            return {std::min(a.x, b.x), std::min(a.y, b.y), std::abs(a.x - b.x), std::abs(a.y - b.y)};
+        }
+
+        // Outline lives in the object layer so it pans and zooms with the level.
+        void drawArea(Editor const& ed, std::optional<CCRect> const& rect, bool dragging) {
+            auto layer = ed.layer->m_objectLayer;
+            auto node = static_cast<CCDrawNode*>(layer->getChildByID("area-outline"_spr));
+            if (!node) {
+                node = CCDrawNode::create();
+                node->setID("area-outline"_spr);
+                layer->addChild(node, 10000);
+            }
+            node->clear();
+            s_areaDrawnScale = layer->getScale();
+            if (!rect) return;
+
+            // Keep the border about 2 screen pixels wide at any zoom.
+            float border = 1.f / std::max(s_areaDrawnScale, 0.05f);
+            ccColor4F fill = {0.2f, 0.8f, 1.f, dragging ? 0.15f : 0.07f};
+            ccColor4F line = {0.2f, 0.8f, 1.f, 0.9f};
+            node->drawRect(
+                CCPoint{rect->getMinX(), rect->getMinY() + kGroundY},
+                CCPoint{rect->getMaxX(), rect->getMaxY() + kGroundY},
+                fill, border, line
+            );
+        }
+
+        void setArea(Editor const& ed, std::optional<CCRect> rect) {
+            s_area = rect;
+            s_areaLayer = rect ? ed.layer : nullptr;
+            s_areaSeq++;
+            drawArea(ed, s_area, false);
+        }
+
+        // Called every frame: forget the area when the editor closes, and
+        // redraw the outline when the zoom changes.
+        void tickArea() {
+            auto ed = editor();
+            if (!ed) {
+                s_area.reset();
+                s_areaLayer = nullptr;
+                s_areaDragging = false;
+                return;
+            }
+            if (s_area && s_areaLayer != ed->layer) setArea(*ed, std::nullopt);
+            if (!s_areaDragging && ed->layer->m_objectLayer->getScale() != s_areaDrawnScale) {
+                drawArea(*ed, s_area, false);
+            }
+        }
+
+        bool areaTouchBegan(CCTouch* touch) {
+            auto ed = editor();
+            if (!s_areaKeyHeld || !ed || playtesting(*ed)) return false;
+            s_areaDragging = true;
+            s_dragStart = touchToLevel(*ed, touch);
+            drawArea(*ed, CCRect(s_dragStart.x, s_dragStart.y, 0.f, 0.f), true);
+            return true;
+        }
+
+        bool areaTouchMoved(CCTouch* touch) {
+            auto ed = editor();
+            if (!s_areaDragging || !ed) return false;
+            drawArea(*ed, rectBetween(s_dragStart, touchToLevel(*ed, touch)), true);
+            return true;
+        }
+
+        bool areaTouchEnded(CCTouch* touch) {
+            auto ed = editor();
+            if (!s_areaDragging || !ed) return false;
+            s_areaDragging = false;
+            auto rect = rectBetween(s_dragStart, touchToLevel(*ed, touch));
+            // A click without a drag clears the area.
+            float minSide = 4.f / std::max(ed->layer->m_objectLayer->getScale(), 0.05f);
+            if (rect.size.width < minSide && rect.size.height < minSide) {
+                setArea(*ed, std::nullopt);
+                Notification::create("Area cleared", NotificationIcon::Info, 1.f)->show();
+            } else {
+                setArea(*ed, rect);
+                Notification::create(
+                    fmt::format("Area {:.0f}x{:.0f} saved, ask the agent", rect.size.width, rect.size.height),
+                    NotificationIcon::Success, 1.5f
+                )->show();
+            }
+            return true;
+        }
+
+        std::string areaJson() {
+            if (!s_area) return fmt::format(R"("seq":{},"area":null)", s_areaSeq);
+            auto const& r = *s_area;
+            int count = 0;
+            if (auto ed = editor()) {
+                for (auto obj : CCArrayExt<GameObject*>(ed->layer->m_objects)) {
+                    if (r.containsPoint(levelPos(obj))) count++;
+                }
+            }
+            return fmt::format(
+                R"("seq":{},"area":{{"x0":{},"y0":{},"x1":{},"y1":{},"width":{},"height":{},"objectCount":{}}})",
+                s_areaSeq, r.getMinX(), r.getMinY(), r.getMaxX(), r.getMaxY(), r.size.width, r.size.height, count
+            );
+        }
+
         std::string songPath(GJGameLevel* level) {
             if (level->m_songID > 0) {
                 return std::string(MusicDownloadManager::sharedState()->pathForSong(level->m_songID));
@@ -222,6 +343,8 @@ namespace bridge {
                 "POST /select     body: uids       empty body deselects\n"
                 "POST /undo                        editor undo\n"
                 "POST /view?x=&y=&zoom=            center the editor camera on a level point\n"
+                "GET  /area                        rect the user marked in the editor (hold the area key + drag)\n"
+                "POST /area?x0=&y0=&x1=&y1=        mark a rect yourself, ?clear=1 removes it\n"
                 "GET  /screenshot                  PNG of the screen, returns its path\n"
                 "     ?x0=&y0=&x1=&y1=             crop to an on-screen rect\n"
                 "     &maxsize=400&hideui=1        longest side in pixels, hide editor UI\n"};
@@ -418,6 +541,23 @@ namespace bridge {
             ));
         }
 
+        Response area(Request const& req) {
+            if (req.method == "GET") return ok(areaJson());
+
+            auto ed = editor();
+            if (!ed) return fail(409, "editor is not open");
+            if (flag(req, "clear", false)) {
+                setArea(*ed, std::nullopt);
+                return ok(areaJson());
+            }
+            auto x0 = number(req, "x0"), y0 = number(req, "y0"), x1 = number(req, "x1"), y1 = number(req, "y1");
+            if (!x0 || !y0 || !x1 || !y1) return fail(400, "need x0, y0, x1, y1 or clear=1");
+            setArea(*ed, rectBetween(
+                {static_cast<float>(*x0), static_cast<float>(*y0)}, {static_cast<float>(*x1), static_cast<float>(*y1)}
+            ));
+            return ok(areaJson());
+        }
+
         Response screenshot(Request const& req) {
             auto director = CCDirector::sharedDirector();
             auto scene = director->getRunningScene();
@@ -521,6 +661,7 @@ namespace bridge {
             if (get && p == "/objects") return objects(req);
             if (get && p == "/level") return levelString();
             if (get && p == "/catalog") return catalog(req);
+            if ((get || post) && p == "/area") return area(req);
             if (get && p == "/screenshot") return screenshot(req);
             if (post && p == "/add") return add(req);
             if (post && p == "/delete") return deleteObjects(req);
@@ -554,5 +695,39 @@ class $modify(BridgeScheduler, CCScheduler) {
             bridge::startServer();
         }
         bridge::drainJobs();
+        bridge::tickArea();
+    }
+};
+
+$execute {
+    listenForKeybindSettingPresses("area-key", [](Keybind const&, bool down, bool repeat, double) {
+        if (repeat) return bridge::s_areaKeyHeld;
+        // Only swallow the key inside the editor, elsewhere it stays a normal key.
+        bridge::s_areaKeyHeld = down && LevelEditorLayer::get() != nullptr;
+        return bridge::s_areaKeyHeld;
+    });
+}
+
+// While the area key is held, mouse drags in the editor mark the area instead
+// of selecting or moving objects.
+class $modify(BridgeEditorUI, EditorUI) {
+    bool ccTouchBegan(CCTouch* touch, CCEvent* event) {
+        if (bridge::areaTouchBegan(touch)) return true;
+        return EditorUI::ccTouchBegan(touch, event);
+    }
+
+    void ccTouchMoved(CCTouch* touch, CCEvent* event) {
+        if (bridge::areaTouchMoved(touch)) return;
+        EditorUI::ccTouchMoved(touch, event);
+    }
+
+    void ccTouchEnded(CCTouch* touch, CCEvent* event) {
+        if (bridge::areaTouchEnded(touch)) return;
+        EditorUI::ccTouchEnded(touch, event);
+    }
+
+    void ccTouchCancelled(CCTouch* touch, CCEvent* event) {
+        if (bridge::areaTouchEnded(touch)) return;
+        EditorUI::ccTouchCancelled(touch, event);
     }
 };

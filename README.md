@@ -23,9 +23,26 @@ curl -s -H "X-GD-Bridge: 1" http://127.0.0.1:7341/state
 | POST | `/select` | Body: uids; empty body deselects |
 | POST | `/undo` | Editor undo |
 | POST | `/view?x=&y=&zoom=` | Centers the camera on a level point |
+| GET | `/area` | Rect the user marked in the editor, with its object count; `"area":null` if none |
+| POST | `/area?x0=&y0=&x1=&y1=` | Marks a rect (shown as an outline in the editor); `?clear=1` removes it |
 | GET | `/screenshot?x0=&y0=&x1=&y1=&maxsize=400` | PNG of the screen, optionally cropped to an on-screen rect and downscaled; returns its path |
 
 All coordinates are level coordinates, as saved in object keys 2/3.
+
+## Marking an area
+
+In the editor, hold **Tab** (rebind it in the mod settings, "Area key") and
+drag with the mouse. The rect stays outlined on the level; a click without a
+drag clears it. Then ask the agent in your CLI, e.g. "decorate the area in a
+space theme". The agent reads the rect with `GET /area`.
+
+## Agents
+
+The bridge is plain HTTP on localhost, so it works with any agent that can run
+shell commands: Claude Code, Codex CLI, Gemini CLI, Cursor, Windsurf, Cline,
+Copilot agent mode, and so on. Agent instructions live in `AGENTS.md`
+(`CLAUDE.md` and `GEMINI.md` point to it).
+
 `tools/gd.sh` wraps these calls; `docs/object-ids.md` lists verified object IDs.
 
 Objects are returned as `{"uid","id","x","y","str"}` where `str` is the
